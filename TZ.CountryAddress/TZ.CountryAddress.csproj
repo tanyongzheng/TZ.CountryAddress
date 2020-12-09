@@ -6,6 +6,7 @@
     <Description>各国邮编，州，城市，地址相关规则及验证库</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/tanyongzheng/TZ.CountryAddress</PackageProjectUrl>
+    <Version>1.0.0.1</Version>
   </PropertyGroup>
 
 </Project>

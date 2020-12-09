@@ -134,7 +134,7 @@ namespace TZ.CountryAddress
                 return result;
             }
 
-            var postCodeMatch = Regex.Match(endPostCode, rule.RangeRegexStr);
+            var postCodeMatch = Regex.Match(postCode, rule.RangeRegexStr);
             if (!endPostCodeMatch.Success)
             {
                 result.msg = "结束邮编范围正则规则不匹配，" + rule.Description;
