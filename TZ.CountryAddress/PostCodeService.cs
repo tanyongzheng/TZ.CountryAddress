@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace TZ.CountryAddress
@@ -47,21 +49,12 @@ namespace TZ.CountryAddress
         {
             (bool success, string msg) result = new ValueTuple<bool, string>();
             var rule= GetPostCodeRule(countryCode);
-            var regexStr = rule?.RegexStr;
-            if (string.IsNullOrEmpty(regexStr))
+            if (rule==null)
             {
                 result.msg = "没匹配到对应国家的邮编规则！";
                 return result;
             }
-
-            if (!Regex.IsMatch(postCode, regexStr))
-            {
-                result.msg = "不符合邮编规则："+rule.Description;
-                return result;
-            }
-
-            result.success = true;
-            result.msg = "符合邮编规则";
+            result = CheckPostCodeFormatByRule(rule, postCode);
             return result;
         }
 
@@ -83,6 +76,13 @@ namespace TZ.CountryAddress
                 result.msg = "没有找到该国家的邮编正则规则";
                 return result;
             }
+            // 检测范围是否正确
+           var rangeCheckResult=  CheckPostCodeRangeByRule(rule, startPostCode, endPostCode, isFixFormat);
+           if (!rangeCheckResult.success)
+           {
+               result.msg = rangeCheckResult.msg;
+               return result;
+           }
 
             //format postal code
             if (rule.RangeIsNumber&&
@@ -93,14 +93,6 @@ namespace TZ.CountryAddress
                 {
                     postCode = postCode.PadLeft(rule.MinLenght.Value,rule.LeftPaddingChar[0]);
                 }
-                if (startPostCode.Length < rule.MinLenght)
-                {
-                    startPostCode = startPostCode.PadLeft(rule.MinLenght.Value,rule.LeftPaddingChar[0]);
-                }
-                if (endPostCode.Length < rule.MinLenght)
-                {
-                    endPostCode = endPostCode.PadLeft(rule.MinLenght.Value,rule.LeftPaddingChar[0]);
-                }
             }
 
             if (isFixFormat&& rule.FixFormatFunc != null)
@@ -110,45 +102,23 @@ namespace TZ.CountryAddress
                 {
                     postCode = fixResult1.formatPostCode;
                 }
-                var fixResult2 = rule.FixFormatFunc(startPostCode);
-                if (fixResult2.success)
-                {
-                    startPostCode = fixResult2.formatPostCode;
-                }
-                var fixResult3 = rule.FixFormatFunc(endPostCode);
-                if (fixResult3.success)
-                {
-                    endPostCode = fixResult3.formatPostCode;
-                }
-            }
-            var startPostCodeMatch = Regex.Match(startPostCode, rule.RangeRegexStr);
-            if (!startPostCodeMatch.Success)
-            {
-                result.msg = "起始邮编范围正则规则不匹配，"+rule.Description;
-                return result;
-            }
-            var endPostCodeMatch = Regex.Match(endPostCode, rule.RangeRegexStr);
-            if (!endPostCodeMatch.Success)
-            {
-                result.msg = "结束邮编范围正则规则不匹配，" + rule.Description;
-                return result;
             }
 
             var postCodeMatch = Regex.Match(postCode, rule.RangeRegexStr);
-            if (!endPostCodeMatch.Success)
+            if (!postCodeMatch.Success)
             {
-                result.msg = "结束邮编范围正则规则不匹配，" + rule.Description;
+                result.msg = "检测邮编正则规则不匹配，" + rule.Description;
                 return result;
             }
 
             if (rule.RangeIsNumber)
             {
-                if (!int.TryParse(startPostCodeMatch.Value, out var startNumber))
+                if (!int.TryParse(startPostCode, out var startNumber))
                 {
                     result.msg = "起始邮编范围转换为数字失败！";
                     return result;
                 }
-                if (!int.TryParse(endPostCodeMatch.Value, out var endNumber))
+                if (!int.TryParse(endPostCode, out var endNumber))
                 {
                     result.msg = "结束邮编范围转换为数字失败！";
                     return result;
@@ -207,6 +177,33 @@ namespace TZ.CountryAddress
 
             result.success = true;
             result.msg = "在范围内";
+            return result;
+        }
+
+        
+        public (bool success, string msg) CheckRangeOverlap(string countryCode,List<PostCodeRangeModel> postCodeRangeList)
+        {
+            (bool success, string msg) result = new ValueTuple<bool, string>();
+            var rule = GetPostCodeRule(countryCode);
+            if (rule == null)
+            {
+                result.msg = "没匹配到对应国家的邮编规则！";
+                return result;
+            }
+            
+            for (var i=0;i< postCodeRangeList.Count;i++)
+            {
+                var rangeItem = postCodeRangeList[i];
+                var currentResult = CheckRangeOverlap(rule, rangeItem, postCodeRangeList, new[] {i});
+                if (!currentResult.success)
+                {
+                    result.msg = currentResult.msg;
+                    return result;
+                }
+            }
+
+            result.success = true;
+            result.msg = "范围列表没有重叠的邮编范围";
             return result;
         }
 
@@ -3469,6 +3466,258 @@ namespace TZ.CountryAddress
                 return list[0];
             }
             return null;
+        }
+
+
+        /// <summary>
+        /// 检测邮编格式
+        /// </summary>
+        /// <paramref name="rule">邮编规则</paramref>
+        /// <param name="rule"></param>
+        /// <param name="postCode">邮编</param>
+        /// <returns></returns>
+        private (bool success, string msg) CheckPostCodeFormatByRule(PostCodeValidationRuleModel rule, string postCode)
+        {
+            (bool success, string msg) result = new ValueTuple<bool, string>();
+            if (rule==null)
+            {
+                result.msg = "邮编规则不能为空！";
+                return result;
+            }
+            var regexStr = rule.RegexStr;
+            if (string.IsNullOrEmpty(regexStr))
+            {
+                result.msg = "邮编规则正则表达式不能为空！";
+                return result;
+            }
+
+            if (!Regex.IsMatch(postCode, regexStr))
+            {
+                result.msg = "不符合邮编规则：" + rule.Description;
+                return result;
+            }
+
+            result.success = true;
+            result.msg = "符合邮编规则";
+            return result;
+        }
+
+
+
+        /// <summary>
+        /// 检测邮编是否在范围内
+        /// </summary>
+        /// <param name="rule">邮编规则</param>
+        /// <param name="startPostCode">起始邮编</param>
+        /// <param name="endPostCode">结束邮编</param>
+        /// <param name="isFixFormat">是否修复邮编格式</param>
+        /// <returns></returns>
+        private (bool success, string msg) CheckPostCodeRangeByRule(PostCodeValidationRuleModel rule, string startPostCode, string endPostCode, bool isFixFormat = true)
+        {
+            (bool success, string msg) result = new ValueTuple<bool, string>();
+            if (rule == null)
+            {
+                result.msg = "邮编规则不能为空！";
+                return result;
+            }
+
+            // format postal code
+            if (rule.RangeIsNumber &&
+                !string.IsNullOrEmpty(rule.LeftPaddingChar) &&
+                rule.LeftPaddingChar.Length == 1)
+            {
+                if (startPostCode.Length < rule.MinLenght)
+                {
+                    startPostCode = startPostCode.PadLeft(rule.MinLenght.Value, rule.LeftPaddingChar[0]);
+                }
+                if (endPostCode.Length < rule.MinLenght)
+                {
+                    endPostCode = endPostCode.PadLeft(rule.MinLenght.Value, rule.LeftPaddingChar[0]);
+                }
+            }
+
+            if (isFixFormat && rule.FixFormatFunc != null)
+            {
+                var fixResult2 = rule.FixFormatFunc(startPostCode);
+                if (fixResult2.success)
+                {
+                    startPostCode = fixResult2.formatPostCode;
+                }
+                var fixResult3 = rule.FixFormatFunc(endPostCode);
+                if (fixResult3.success)
+                {
+                    endPostCode = fixResult3.formatPostCode;
+                }
+            }
+            var startPostCodeMatch = Regex.Match(startPostCode, rule.RangeRegexStr);
+            if (!startPostCodeMatch.Success)
+            {
+                result.msg = "起始邮编范围正则规则不匹配，" + rule.Description;
+                return result;
+            }
+            var endPostCodeMatch = Regex.Match(endPostCode, rule.RangeRegexStr);
+            if (!endPostCodeMatch.Success)
+            {
+                result.msg = "结束邮编范围正则规则不匹配，" + rule.Description;
+                return result;
+            }
+
+            // 邮编范围是数字
+            if (rule.RangeIsNumber)
+            {
+                if (!int.TryParse(startPostCodeMatch.Value, out var startNumber))
+                {
+                    result.msg = "起始邮编范围转换为数字失败！";
+                    return result;
+                }
+                if (!int.TryParse(endPostCodeMatch.Value, out var endNumber))
+                {
+                    result.msg = "结束邮编范围转换为数字失败！";
+                    return result;
+                }
+
+                if (startNumber > endNumber)
+                {
+                    result.msg = "起始邮编不能大于结束邮编！";
+                    return result;
+                }
+
+                result.success = true;
+                result.msg = "邮编范围正确！";
+                return result;
+            }
+
+            result.success = true;
+            result.msg = "邮编范围正确！";
+            return result;
+        }
+
+
+        private (bool success, string msg) CheckRangeOverlap(
+            PostCodeValidationRuleModel rule,
+            PostCodeRangeModel postCodeRange, 
+            List<PostCodeRangeModel> postCodeRangeList,
+            int[] excludeRangeIndexs=null
+            )
+        {
+            (bool success, string msg) result = new ValueTuple<bool, string>();
+            if (rule == null)
+            {
+                result.msg = "邮编规则不能为空！";
+                return result;
+            }
+            {
+                var checkRangeResult = CheckPostCodeRangeByRule(rule, postCodeRange.StartPostCode, postCodeRange.EndPostCode);
+                if (!checkRangeResult.success)
+                {
+                    result.msg = $"邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]{checkRangeResult.msg}";
+                    return result;
+                }
+            }
+            for (var i = 0; i < postCodeRangeList.Count; i++)
+            {
+                if (excludeRangeIndexs != null && excludeRangeIndexs.Length > 0)
+                {
+                    if(excludeRangeIndexs.Contains(i)) continue;
+                }
+                var rangeItem = postCodeRangeList[i];
+                var checkRangeResult = CheckPostCodeRangeByRule(rule, rangeItem.StartPostCode, rangeItem.EndPostCode);
+                if (!checkRangeResult.success)
+                {
+                    result.msg = $"邮编范围[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]{checkRangeResult.msg}";
+                    return result;
+                }
+
+                #region 数字范围的邮编
+                if (rule.RangeIsNumber)
+                {
+
+                    #region 匹配范围正则表达式
+                    var startPostCodeMatch = Regex.Match(postCodeRange.StartPostCode, rule.RangeRegexStr);
+                    if (!startPostCodeMatch.Success)
+                    {
+                        result.msg = $"当前被验证邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]起始邮编范围正则规则不匹配，" + rule.Description;
+                        return result;
+                    }
+                    var endPostCodeMatch = Regex.Match(postCodeRange.EndPostCode, rule.RangeRegexStr);
+                    if (!endPostCodeMatch.Success)
+                    {
+                        result.msg = $"当前被验证邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]结束邮编范围正则规则不匹配，" + rule.Description;
+                        return result;
+                    }
+
+                    if (!int.TryParse(startPostCodeMatch.Value, out var rangeStartNumber))
+                    {
+                        result.msg = $"当前被验证起始邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]转换为数字失败！";
+                        return result;
+                    }
+                    if (!int.TryParse(endPostCodeMatch.Value, out var rangeEndNumber))
+                    {
+                        result.msg = $"当前被验证结束邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]转换为数字失败！";
+                        return result;
+                    }
+                    #endregion
+
+                    #region 数字范围的邮编
+                    var minPostCodeMatch = Regex.Match(rangeItem.StartPostCode, rule.RangeRegexStr);
+                    if (!minPostCodeMatch.Success)
+                    {
+                        result.msg = $"当前验证重叠邮编范围[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]开始邮编范围正则规则不匹配，" + rule.Description;
+                        return result;
+                    }
+
+                    var maxPostCodeMatch = Regex.Match(rangeItem.EndPostCode, rule.RangeRegexStr);
+                    if (!maxPostCodeMatch.Success)
+                    {
+                        result.msg = $"当前验证重叠邮编范围[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]结束邮编范围正则规则不匹配，" + rule.Description;
+                        return result;
+                    }
+
+                    if (!int.TryParse(minPostCodeMatch.Value, out var minNumber))
+                    {
+                        result.msg = $"当前验证重叠邮编范围[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]开始邮编转换为数字失败！";
+                        return result;
+                    }
+                    if (!int.TryParse(maxPostCodeMatch.Value, out var maxNumber))
+                    {
+                        result.msg = $"当前验证重叠邮编范围[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]结束邮编转换为数字失败！";
+                        return result;
+                    } 
+                    #endregion
+
+                    if (rangeStartNumber >= minNumber&&rangeStartNumber<=maxNumber)
+                    {
+                        result.msg = $"邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]与[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]有重叠！";
+                        return result;
+                    }
+
+                    if (rangeEndNumber >= minNumber&&rangeEndNumber<=maxNumber)
+                    {
+                        result.msg = $"邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]与[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]有重叠！";
+                        return result;
+                    }
+                }
+                #endregion
+
+                #region 非数字范围邮编
+                else
+                {
+                    if (postCodeRange.StartPostCode==rangeItem.StartPostCode||
+                        postCodeRange.StartPostCode==rangeItem.EndPostCode||
+                        postCodeRange.EndPostCode==rangeItem.StartPostCode||
+                        postCodeRange.EndPostCode==rangeItem.EndPostCode
+                    )
+                    {
+                        result.msg = $"邮编范围[{postCodeRange.StartPostCode}-{postCodeRange.EndPostCode}]与[{rangeItem.StartPostCode}-{rangeItem.EndPostCode}]有重叠！";
+                        return result;
+                    }
+                }
+                #endregion
+            }
+
+            result.success = true;
+            result.msg = "没有重叠的邮编范围";
+            return result;
         }
         #endregion
 
